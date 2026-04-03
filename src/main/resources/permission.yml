@@ -1,0 +1,14 @@
+﻿groups:
+  admin:
+    - gatewayserver.stop
+    - gatewayserver.kick
+    - gatewayserver.say
+    - gatewayserver.gamemode
+  default:
+    - gatewayserver.spawn
+    - gatewayserver.chat
+    - gatewayserver.version
+
+players:
+  LOOHP: 
+    - admin

@@ -1,0 +1,267 @@
+name: E2E Proxy Harness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  e2e-proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install E2E prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq netcat-openbsd
+
+      - name: Build Gateway jar
+        run: |
+          chmod +x gradlew
+          ./gradlew clean shadowJar --no-daemon
+
+      - name: Prepare E2E runtime files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/e2e/{gateway-bungee,gateway-velocity,waterfall,velocity}
+          cp spawn.schem .ci/e2e/gateway-bungee/spawn.schem
+          cp spawn.schem .ci/e2e/gateway-velocity/spawn.schem
+          GATEWAY_JAR="$(find build/libs -maxdepth 1 -type f -name 'Gateway-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)"
+          if [[ -z "${GATEWAY_JAR:-}" ]]; then
+            echo "Gateway runtime jar not found in build/libs" >&2
+            exit 1
+          fi
+          cp "$GATEWAY_JAR" .ci/e2e/Gateway.jar
+
+          cat > .ci/e2e/gateway-bungee/server.properties <<'EOF'
+          max-players=100
+          server-ip=127.0.0.1
+          server-port=25580
+          ticks-per-second=5
+          view-distance=6
+          protocol-translation-mode=builtin
+          bungeecord=true
+          velocity-modern=false
+          bungee-guard=false
+          forwarding-secrets=
+          level-name=world;spawn.schem
+          level-dimension=minecraft:overworld
+          world-spawn=world;20.5;17;22.5;-90;0
+          default-gamemode=adventure
+          allow-flight=false
+          allow-chat=true
+          max-packet-size-bytes=262144
+          max-inbound-packets-per-second=400
+          max-chat-message-length=256
+          max-command-length=256
+          max-plugin-message-payload-bytes=32767
+          max-command-args=64
+          enforce-whitelist=false
+          reduced-debug-info=true
+          log-player-ip-addresses=false
+          handshake-verbose=false
+          version=Gateway
+          motd=<yellow>Gateway Server!</yellow>
+          tab-header=
+          tab-footer=
+          resource-pack=
+          resource-pack-sha1=
+          required-resource-pack=false
+          resource-pack-prompt=<yellow>Install server resource pack!</yellow>
+          EOF
+
+          cat > .ci/e2e/gateway-velocity/server.properties <<'EOF'
+          max-players=100
+          server-ip=127.0.0.1
+          server-port=25581
+          ticks-per-second=5
+          view-distance=6
+          protocol-translation-mode=builtin
+          bungeecord=false
+          velocity-modern=true
+          bungee-guard=false
+          forwarding-secrets=velocity-secret
+          level-name=world;spawn.schem
+          level-dimension=minecraft:overworld
+          world-spawn=world;20.5;17;22.5;-90;0
+          default-gamemode=adventure
+          allow-flight=false
+          allow-chat=true
+          max-packet-size-bytes=262144
+          max-inbound-packets-per-second=400
+          max-chat-message-length=256
+          max-command-length=256
+          max-plugin-message-payload-bytes=32767
+          max-command-args=64
+          enforce-whitelist=false
+          reduced-debug-info=true
+          log-player-ip-addresses=false
+          handshake-verbose=false
+          version=Gateway
+          motd=<yellow>Gateway Server!</yellow>
+          tab-header=
+          tab-footer=
+          resource-pack=
+          resource-pack-sha1=
+          required-resource-pack=false
+          resource-pack-prompt=<yellow>Install server resource pack!</yellow>
+          EOF
+
+          cat > .ci/e2e/waterfall/config.yml <<'EOF'
+          listeners:
+          - query_port: 25576
+            motd: '&eGateway E2E'
+            tab_list: GLOBAL_PING
+            query_enabled: false
+            proxy_protocol: false
+            priorities:
+            - gateway
+            bind_local_address: true
+            host: 0.0.0.0:25576
+            max_players: 100
+            force_default_server: true
+            forced_hosts: {}
+            tab_size: 60
+            ping_passthrough: true
+            online_mode: false
+            force_key_authentication: false
+          remote_ping_cache: -1
+          network_compression_threshold: 256
+          servers:
+            gateway:
+              motd: '&eGateway'
+              address: 127.0.0.1:25580
+              restricted: false
+          ip_forward: true
+          player_limit: -1
+          groups: {}
+          connection_throttle: -1
+          prevent_proxy_connections: false
+          timeout: 30000
+          log_commands: false
+          log_pings: true
+          disabled_commands: []
+          EOF
+
+          cat > .ci/e2e/velocity/velocity.toml <<'EOF'
+          config-version = "2.7"
+          bind = "0.0.0.0:25577"
+          motd = "<yellow>Gateway E2E</yellow>"
+          show-max-players = 100
+          online-mode = false
+          force-key-authentication = false
+          prevent-client-proxy-connections = false
+          player-info-forwarding-mode = "modern"
+          forwarding-secret-file = "forwarding.secret"
+          ping-passthrough = "all"
+          [servers]
+          gateway = "127.0.0.1:25581"
+          try = ["gateway"]
+          EOF
+
+          echo "velocity-secret" > .ci/e2e/velocity/forwarding.secret
+
+      - name: Download Waterfall and Velocity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/e2e/bin
+
+          WATERFALL_VERSION="$(curl -fsSL https://api.papermc.io/v2/projects/waterfall | jq -r '.versions[-1]')"
+          WATERFALL_BUILD="$(curl -fsSL "https://api.papermc.io/v2/projects/waterfall/versions/${WATERFALL_VERSION}" | jq -r '.builds[-1]')"
+          curl -fsSL -o .ci/e2e/bin/waterfall.jar "https://api.papermc.io/v2/projects/waterfall/versions/${WATERFALL_VERSION}/builds/${WATERFALL_BUILD}/downloads/waterfall-${WATERFALL_VERSION}-${WATERFALL_BUILD}.jar"
+
+          VELOCITY_VERSION="$(curl -fsSL https://api.papermc.io/v2/projects/velocity | jq -r '.versions[-1]')"
+          VELOCITY_BUILD="$(curl -fsSL "https://api.papermc.io/v2/projects/velocity/versions/${VELOCITY_VERSION}" | jq -r '.builds[-1]')"
+          curl -fsSL -o .ci/e2e/bin/velocity.jar "https://api.papermc.io/v2/projects/velocity/versions/${VELOCITY_VERSION}/builds/${VELOCITY_BUILD}/downloads/velocity-${VELOCITY_VERSION}-${VELOCITY_BUILD}.jar"
+
+      - name: Start Gateway and proxies
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd .ci/e2e/gateway-bungee
+            java -jar ../Gateway.jar --nogui > ../gateway-bungee-instance.log 2>&1
+          ) &
+          GATEWAY_BUNGEE_INSTANCE_PID=$!
+
+          (
+            cd .ci/e2e/gateway-velocity
+            java -jar ../Gateway.jar --nogui > ../gateway-velocity-instance.log 2>&1
+          ) &
+          GATEWAY_VELOCITY_INSTANCE_PID=$!
+
+          (
+            cd .ci/e2e/waterfall
+            java -jar ../bin/waterfall.jar > ../waterfall.log 2>&1
+          ) &
+          WATERFALL_PID=$!
+
+          (
+            cd .ci/e2e/velocity
+            java -jar ../bin/velocity.jar > ../velocity.log 2>&1
+          ) &
+          VELOCITY_PID=$!
+
+          echo "GATEWAY_BUNGEE_INSTANCE_PID=$GATEWAY_BUNGEE_INSTANCE_PID" >> $GITHUB_ENV
+          echo "GATEWAY_VELOCITY_INSTANCE_PID=$GATEWAY_VELOCITY_INSTANCE_PID" >> $GITHUB_ENV
+          echo "WATERFALL_PID=$WATERFALL_PID" >> $GITHUB_ENV
+          echo "VELOCITY_PID=$VELOCITY_PID" >> $GITHUB_ENV
+
+      - name: Wait for ports
+        shell: bash
+        run: |
+          set -euo pipefail
+          for port in 25576 25577 25580 25581; do
+            for i in {1..60}; do
+              if nc -z 127.0.0.1 "$port"; then
+                echo "Port $port is up"
+                break
+              fi
+              sleep 1
+              if [[ "$i" -eq 60 ]]; then
+                echo "Port $port did not become ready" >&2
+                exit 1
+              fi
+            done
+          done
+
+      - name: Probe status endpoints
+        run: |
+          python3 scripts/e2e_status_probe.py 127.0.0.1 25580
+          python3 scripts/e2e_status_probe.py 127.0.0.1 25581
+          python3 scripts/e2e_status_probe.py 127.0.0.1 25576
+          python3 scripts/e2e_status_probe.py 127.0.0.1 25577
+
+      - name: Upload E2E logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-proxy-logs
+          path: .ci/e2e/*.log
+          if-no-files-found: warn
+
+      - name: Stop E2E processes
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for pid in "$GATEWAY_BUNGEE_INSTANCE_PID" "$GATEWAY_VELOCITY_INSTANCE_PID" "$WATERFALL_PID" "$VELOCITY_PID"; do
+            if [[ -n "${pid:-}" ]]; then
+              kill "$pid" 2>/dev/null || true
+            fi
+          done

@@ -1,0 +1,25 @@
+package dev.lenvx.gateway.network.protocol.packets
+
+import dev.lenvx.gateway.registry.PacketRegistry
+import dev.lenvx.gateway.utils.DataTypeIO
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import java.io.IOException
+
+class ClientboundSetTitlesAnimationPacket(
+    val fadeIn: Int,
+    val stay: Int,
+    val fadeOut: Int
+) : PacketOut() {
+
+    @Throws(IOException::class)
+    override fun serializePacket(): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        val output = DataOutputStream(buffer)
+        DataTypeIO.writeVarInt(output, PacketRegistry.getPacketId(this::class.java))
+        output.writeInt(fadeIn)
+        output.writeInt(stay)
+        output.writeInt(fadeOut)
+        return buffer.toByteArray()
+    }
+}
