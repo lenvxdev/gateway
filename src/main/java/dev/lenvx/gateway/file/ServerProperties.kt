@@ -3,6 +3,8 @@
 import dev.lenvx.gateway.Gateway
 import dev.lenvx.gateway.location.Location
 import dev.lenvx.gateway.utils.GameMode
+import dev.lenvx.gateway.world.Environment
+import dev.lenvx.gateway.world.World
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.minimessage.MiniMessage
@@ -166,15 +168,17 @@ class ServerProperties(val file: File) {
         levelDimension = Key.key(prop.getProperty("level-dimension"))
         defaultGamemode = GameMode.fromName(Key.key(prop.getProperty("default-gamemode")).value()) ?: GameMode.SURVIVAL
         val locStr = prop.getProperty("world-spawn").split(";").toTypedArray()
-        val world = Gateway.instance!!.getWorld(locStr[0]) ?: run {
-            Gateway.instance!!.console.sendMessage("World ${locStr[0]} not found! Using default world.")
-            Gateway.instance!!.worlds[0]
+        val spawnWorldName = locStr.getOrNull(0)?.takeIf { it.isNotBlank() } ?: levelName.value()
+        val x = locStr.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+        val y = locStr.getOrNull(2)?.toDoubleOrNull() ?: 64.0
+        val z = locStr.getOrNull(3)?.toDoubleOrNull() ?: 0.0
+        val yaw = locStr.getOrNull(4)?.toFloatOrNull() ?: 0f
+        val pitch = locStr.getOrNull(5)?.toFloatOrNull() ?: 0f
+        val world = Gateway.instance!!.getWorld(spawnWorldName) ?: run {
+            Gateway.instance!!.console.sendMessage("World $spawnWorldName not found! Using default world.")
+            Gateway.instance!!.getWorld(levelName.value())
+                ?: World(levelName.value(), 1, 1, Environment.fromKey(levelDimension) ?: Environment.NORMAL)
         }
-        val x = locStr[1].toDouble()
-        val y = locStr[2].toDouble()
-        val z = locStr[3].toDouble()
-        val yaw = locStr[4].toFloat()
-        val pitch = locStr[5].toFloat()
         worldSpawn = Location(world, x, y, z, yaw, pitch)
         isReducedDebugInfo = prop.getProperty("reduced-debug-info").toBoolean()
         isLogPlayerIPAddresses = prop.getProperty("log-player-ip-addresses").toBoolean()
